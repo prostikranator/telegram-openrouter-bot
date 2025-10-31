@@ -3,6 +3,4 @@ gunicorn
 pytelegrambotapi
 requests
 pandas
-tinkoff-invest-api
-protobuf
-grpcio
+tinkoff-invest-api-sdk-aio
