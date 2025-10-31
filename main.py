@@ -3,22 +3,21 @@ import telebot
 import requests 
 from flask import Flask, request
 import logging
+import threading  # <-- ДОБАВЛЕН ДЛЯ РЕШЕНИЯ ПРОБЛЕМЫ ТАЙМАУТА
 
-# Настраиваем логирование, чтобы видеть ошибки в консоли Render
+# Настраиваем логирование
 logging.basicConfig(level=logging.INFO)
 
-# --- 1. Инициализация Flask (ОБЯЗАТЕЛЬНО 'app') ---
+# --- 1. Инициализация Flask ---
 app = Flask(__name__)
 
 # --- 2. Конфигурация Бота и Ключей ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-# Используем запасной вариант для RENDER_EXTERNAL_URL на случай, если он не установлен сразу
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost") 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") 
-# Используем запасной вариант для модели
 OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct") 
 
-# ВАЖНОЕ ЛОГИРОВАНИЕ ДЛЯ ПРОВЕРКИ КЛЮЧЕЙ ПРИ СТАРТЕ
+# Логирование для подтверждения загрузки ключей
 if OPENROUTER_API_KEY and TELEGRAM_TOKEN:
     logging.info(f"KEYS LOADED. Model: {OPENROUTER_MODEL}")
     logging.info(f"API Key Status: SUCCESS. Starts with: {OPENROUTER_API_KEY[:4]}...") 
@@ -40,9 +39,10 @@ def send_welcome(message):
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     """
-    Обрабатывает входящие сообщения, используя ключ и модель из переменных среды.
+    Обрабатывает входящие сообщения, отправляя запрос в OpenRouter.
     """
     
+    # Визуальный ответ, пока модель думает
     bot.send_chat_action(message.chat.id, 'typing') 
 
     try:
@@ -62,13 +62,13 @@ def handle_message(message):
         
         # Данные для отправки в OpenRouter
         data = {
-            "model": OPENROUTER_MODEL, # Используем переменную OPENROUTER_MODEL
+            "model": OPENROUTER_MODEL,
             "messages": [
                 {"role": "user", "content": message.text}
             ]
         }
         
-        # Отправка запроса с таймаутом в 30 секунд
+        # Отправка запроса
         response = requests.post(url, headers=headers, json=data, timeout=30)
         
         # Проверка HTTP-статуса
@@ -82,9 +82,9 @@ def handle_message(message):
         bot.reply_to(message, response_text)
         
     except requests.exceptions.HTTPError as http_err:
-        # Логика обработки ошибок API (особенно 401)
+        # Логика обработки ошибок API (401, 429 и т.д.)
         if http_err.response.status_code == 401:
-            error_message = "Ошибка 401: API-ключ недействителен. Пожалуйста, проверьте OPENROUTER_API_KEY."
+            error_message = "Ошибка 401: API-ключ недействителен. Проверьте OPENROUTER_API_KEY."
         else:
             error_message = f"Ошибка HTTP запроса к OpenRouter (статус {http_err.response.status_code}): {http_err.response.text}"
         
@@ -94,7 +94,7 @@ def handle_message(message):
     except requests.exceptions.RequestException as req_err:
         # Ошибка сети/таймаута
         logging.error(f"Ошибка запроса к OpenRouter: {req_err}")
-        bot.reply_to(message, "Ошибка связи с моделью OpenRouter. Попробуйте позже.")
+        bot.reply_to(message, "Ошибка связи с моделью OpenRouter (таймаут). Попробуйте позже.")
     except Exception as e:
         # Критическая ошибка
         logging.error(f"Критическая ошибка: {e}")
@@ -127,12 +127,19 @@ def set_webhook_route():
 
 @app.route(SECRET_ROUTE, methods=['POST'])
 def webhook():
-    """Обрабатывает все POST-запросы от Telegram."""
+    """
+    Обрабатывает все POST-запросы от Telegram. 
+    Использует потоки, чтобы избежать таймаута.
+    """
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return '', 200
+        
+        # Запуск обработки в отдельном потоке
+        threading.Thread(target=bot.process_new_updates, args=([update],)).start()
+        
+        # Сразу возвращаем 200 OK, чтобы Telegram не переотправлял запрос
+        return '', 200 
     else:
         return 'Bad Request', 403
 
