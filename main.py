@@ -1,149 +1,126 @@
 import os
-import telebot
-import requests 
-from flask import Flask, request
 import logging
-import threading  # <-- ДОБАВЛЕН ДЛЯ РЕШЕНИЯ ПРОБЛЕМЫ ТАЙМАУТА
+import threading
+import requests
+from flask import Flask, request
 
-# Настраиваем логирование
+import telebot
+from telebot import types
+
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# --- 1. Инициализация Flask ---
-app = Flask(__name__)
-
-# --- 2. Конфигурация Бота и Ключей ---
+# --- Переменные среды (обязательно задать в Render) ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost") 
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") 
-OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct") 
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct")
+# полный публичный URL сервиса на Render, например https://имя-app.onrender.com
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
-# Логирование для подтверждения загрузки ключей
-if OPENROUTER_API_KEY and TELEGRAM_TOKEN:
-    logging.info(f"KEYS LOADED. Model: {OPENROUTER_MODEL}")
-    logging.info(f"API Key Status: SUCCESS. Starts with: {OPENROUTER_API_KEY[:4]}...") 
-else:
-    logging.critical("CRITICAL: One or more required keys (TELEGRAM_TOKEN or OPENROUTER_API_KEY) are MISSING.")
+if not TELEGRAM_TOKEN:
+    logger.critical("TELEGRAM_TOKEN не задан. Прекращаю запуск.")
+if not OPENROUTER_API_KEY:
+    logger.warning("OPENROUTER_API_KEY не задан. Запросы к AI будут давать ошибку.")
 
+# Инициализация Flask и TeleBot
+app = Flask(__name__)
+bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
+SECRET_ROUTE = f"/{TELEGRAM_TOKEN}"
 
-# Инициализация объекта бота
-bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode='html')
-SECRET_ROUTE = '/' + TELEGRAM_TOKEN 
-
-# --- 3. Функции обработки сообщений ---
-
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    """Отправляет приветственное сообщение."""
-    bot.reply_to(message, "Привет! Я бот, работающий через OpenRouter. Отправь мне сообщение!")
-
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    """
-    Обрабатывает входящие сообщения, отправляя запрос в OpenRouter.
-    """
-    
-    # Визуальный ответ, пока модель думает
-    bot.send_chat_action(message.chat.id, 'typing') 
-
-    try:
-        if not OPENROUTER_API_KEY:
-            logging.error("Невозможно выполнить запрос: API-ключ OpenRouter отсутствует.")
-            bot.reply_to(message, "Ошибка: Ключ OpenRouter API не установлен на сервере.")
-            return
-
-        # API endpoint OpenRouter
-        url = "https://openrouter.ai/api/v1/chat/completions"
-        
-        # Заголовки для авторизации
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        # Данные для отправки в OpenRouter
-        data = {
-            "model": OPENROUTER_MODEL,
-            "messages": [
-                {"role": "user", "content": message.text}
-            ]
-        }
-        
-        # Отправка запроса
-        response = requests.post(url, headers=headers, json=data, timeout=30)
-        
-        # Проверка HTTP-статуса
-        response.raise_for_status() 
-        
-        # Извлечение текста ответа
-        response_data = response.json()
-        response_text = response_data['choices'][0]['message']['content']
-        
-        # Отправка ответа пользователю
-        bot.reply_to(message, response_text)
-        
-    except requests.exceptions.HTTPError as http_err:
-        # Логика обработки ошибок API (401, 429 и т.д.)
-        if http_err.response.status_code == 401:
-            error_message = "Ошибка 401: API-ключ недействителен. Проверьте OPENROUTER_API_KEY."
-        else:
-            error_message = f"Ошибка HTTP запроса к OpenRouter (статус {http_err.response.status_code}): {http_err.response.text}"
-        
-        logging.error(error_message)
-        bot.reply_to(message, error_message)
-        
-    except requests.exceptions.RequestException as req_err:
-        # Ошибка сети/таймаута
-        logging.error(f"Ошибка запроса к OpenRouter: {req_err}")
-        bot.reply_to(message, "Ошибка связи с моделью OpenRouter (таймаут). Попробуйте позже.")
-    except Exception as e:
-        # Критическая ошибка
-        logging.error(f"Критическая ошибка: {e}")
-        bot.reply_to(message, f"Произошла внутренняя ошибка: {e}")
-
-# --- 4. Маршруты Flask для Webhook ---
-
+# --- Простая проверка работоспособности ---
 @app.route("/", methods=["GET"])
-def home():
-    """Проверяет, что сервер работает."""
-    return "Webhook server is running. Access /setwebhook/ to configure.", 200
+def index():
+    return "OK", 200
 
+# --- Установка webhook через специальный маршрут (ручной запуск) ---
 @app.route("/setwebhook/", methods=["GET"])
 def set_webhook_route():
-    """Маршрут для установки Webhook'а в Telegram."""
+    if not RENDER_EXTERNAL_URL or not TELEGRAM_TOKEN:
+        return "RENDER_EXTERNAL_URL или TELEGRAM_TOKEN не заданы", 500
+    webhook_url = RENDER_EXTERNAL_URL.rstrip("/") + SECRET_ROUTE
     try:
-        webhook_url = RENDER_EXTERNAL_URL + SECRET_ROUTE
-        is_set = bot.set_webhook(url=webhook_url)
-        
-        if is_set:
-            logging.info(f"Webhook успешно установлен на: {webhook_url}")
-            return f"Webhook successfully set to: {webhook_url}", 200
+        ok = bot.set_webhook(url=webhook_url)
+        if ok:
+            logger.info(f"Webhook установлен: {webhook_url}")
+            return f"Webhook установлен: {webhook_url}", 200
         else:
-            logging.error("Не удалось установить Webhook.")
-            return "Webhook setup failed.", 500
-            
+            logger.error("Ответ телеграма: не удалось установить webhook")
+            return "Webhook setup failed", 500
     except Exception as e:
-        logging.error(f"Ошибка при установке Webhook: {e}")
-        return f"Error setting webhook: {e}", 500
+        logger.exception("Ошибка при установке webhook")
+        return f"Error: {e}", 500
 
-@app.route(SECRET_ROUTE, methods=['POST'])
-def webhook():
-    """
-    Обрабатывает все POST-запросы от Telegram. 
-    Использует потоки, чтобы избежать таймаута.
-    """
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
+# --- Обработка входящих webhook POST от Telegram ---
+@app.route(SECRET_ROUTE, methods=["POST"])
+def telegram_webhook():
+    if request.headers.get("content-type") != "application/json":
+        return "Bad Request", 400
+    try:
+        json_string = request.get_data().decode("utf-8")
         update = telebot.types.Update.de_json(json_string)
-        
-        # Запуск обработки в отдельном потоке
-        threading.Thread(target=bot.process_new_updates, args=([update],)).start()
-        
-        # Сразу возвращаем 200 OK, чтобы Telegram не переотправлял запрос
-        return '', 200 
-    else:
-        return 'Bad Request', 403
+        # обработка в отдельном потоке, чтобы быстро вернуть 200
+        threading.Thread(target=bot.process_new_updates, args=([update],), daemon=True).start()
+        return "", 200
+    except Exception as e:
+        logger.exception("Ошибка при обработке webhook")
+        return "Error", 500
 
-# --- 5. Запуск (Gunicorn будет использовать 'app') ---
+# --- Простейшие обработчики команд и текста ---
+@bot.message_handler(commands=["start", "help"])
+def cmd_start(message: types.Message):
+    bot.reply_to(message, "Привет. Я бот через OpenRouter. Отправь любое сообщение.")
+
+@bot.message_handler(func=lambda m: True)
+def handle_message(message: types.Message):
+    logger.info(f"Получено сообщение от {message.chat.id}")
+    bot.send_chat_action(message.chat.id, "typing")
+    if not OPENROUTER_API_KEY:
+        bot.reply_to(message, "Ошибка: OPENROUTER_API_KEY не настроен на сервере.")
+        return
+
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {"role": "user", "content": message.text}
+        ]
+    }
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        resp = requests.post("https://openrouter.ai/api/v1/chat/completions",
+                             json=payload, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        text = data["choices"][0]["message"]["content"].strip()
+        if not text:
+            text = "Пустой ответ от модели."
+        bot.reply_to(message, text)
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else "?"
+        logger.error(f"HTTP error from OpenRouter: {status} {e}")
+        bot.reply_to(message, f"Ошибка от OpenRouter (код {status}).")
+    except Exception as e:
+        logger.exception("Ошибка при запросе к OpenRouter")
+        bot.reply_to(message, "Ошибка сервера при обработке запроса. Попробуйте позже.")
+
+# --- Автоустановка webhook при старте (если REENDER_EXTERNAL_URL задан) ---
+def try_set_webhook_on_start():
+    if RENDER_EXTERNAL_URL and TELEGRAM_TOKEN:
+        webhook_url = RENDER_EXTERNAL_URL.rstrip("/") + SECRET_ROUTE
+        try:
+            ok = bot.set_webhook(url=webhook_url)
+            logger.info(f"set_webhook called on start. result: {ok} url: {webhook_url}")
+        except Exception:
+            logger.exception("Не удалось установить webhook при старте.")
+
+# При импорте модуля (gunicorn) запустим попытку установки webhook
+try_set_webhook_on_start()
+
+# --- Для локального запуска (не на Render) ---
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
+    # если нужно, можно в фоне дернуть set_webhook_route вручную, но мы уже пытались выше
     app.run(host="0.0.0.0", port=port)
