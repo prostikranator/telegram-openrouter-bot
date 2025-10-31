@@ -3,3 +3,4 @@ gunicorn
 pytelegrambotapi
 requests
 pandas
+tinkoff-invest
