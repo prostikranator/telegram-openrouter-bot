@@ -2,4 +2,5 @@ flask
 pytelegrambotapi
 requests
 gunicorn
-tinkoff-invest-api  # <-- НОВАЯ ЗАВИСИМОСТЬ
+tinkoff-invest-api-sdk  # <-- ИСПРАВЛЕННОЕ ИМЯ
+pandas                 # <-- Добавлено для работы с функцией get_tinkoff_portfolio
