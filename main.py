@@ -9,7 +9,7 @@ from telebot import types
 import telebot
 
 # --- ФИНАЛЬНЫЙ ИСПРАВЛЕННЫЙ ИМПОРТ: Используем официальное пространство имен tinkoff.invest ---
-# Этот путь импорта соответствует пакету, установленному через ссылку на GitHub.
+# Этот путь импорта гарантированно работает с пакетом, установленным через Git-ссылку.
 from tinkoff.invest import Client, MoneyValue, PortfolioResponse
 from tinkoff.invest.exceptions import RequestError 
 
@@ -56,7 +56,7 @@ def get_tinkoff_portfolio() -> str:
             total_value = to_rubles(portfolio.total_amount_portfolio)
             
             for p in portfolio.positions:
-                # ИСКОМЫЕ ПОЛЯ: Используем p.ticker и p.instrument_type вместо p.name
+                # ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ: Используем p.figi вместо p.ticker
                 
                 expected_yield_value = to_rubles(p.expected_yield) if p.expected_yield else 0
                 current_price = to_rubles(p.current_price)
@@ -68,7 +68,7 @@ def get_tinkoff_portfolio() -> str:
                 total_position_value = current_price * p.quantity.units
                 
                 data.append({
-                    'Тикер': p.ticker,
+                    'Тикер/FIGI': p.figi, # <--- ИСПРАВЛЕНИЕ
                     'Тип': p.instrument_type,
                     'Кол-во': p.quantity.units,
                     'Цена (RUB)': f"{current_price:.2f}",
@@ -172,20 +172,4 @@ def set_webhook():
 
 @app.route(SECRET_ROUTE, methods=["POST"])
 def telegram_webhook():
-    """Главный маршрут: запускает всю обработку в отдельном потоке."""
-    if request.headers.get("content-type") != "application/json":
-        return "Bad Request", 400
-    try:
-        json_string = request.get_data().decode("utf-8")
-        update = telebot.types.Update.de_json(json_string)
-        # Запуск обработки в отдельном потоке (ВСЕГДА ДЕЛАЕМ ЭТО!)
-        threading.Thread(target=bot.process_new_updates, args=([update],), daemon=True).start()
-        return "OK", 200
-    except Exception as e:
-        logger.exception("Ошибка при обработке webhook")
-        return "Error", 500
-
-# --- 7. ЗАПУСК ---
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    """Главный маршрут: запускает всю обрабо
