@@ -1,5 +1,6 @@
 import os
 import telebot
+import requests  # <-- Добавили requests для OpenRouter
 from flask import Flask, request
 import logging
 
@@ -7,23 +8,20 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 # --- 1. Инициализация Flask (ОБЯЗАТЕЛЬНО 'app') ---
-# Gunicorn ищет эту переменную!
 app = Flask(__name__)
 
 # --- 2. Конфигурация Бота и Ключей ---
-# Получение токена из переменных среды Render
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-# URL сервиса Render (автоматически предоставляется Render)
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
-# Ключ OpenRouter (для AI-запросов)
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") 
 
 if not TELEGRAM_TOKEN or not RENDER_EXTERNAL_URL or not OPENROUTER_API_KEY:
-    logging.error("Не хватает одной или нескольких переменных среды: TELEGRAM_TOKEN, RENDER_EXTERNAL_URL, OPENROUTER_API_KEY.")
+    logging.error("Не хватает переменных среды! Проверьте TELEGRAM_TOKEN, RENDER_EXTERNAL_URL, OPENROUTER_API_KEY.")
+    # Не запускаем бота, если ключей нет, чтобы избежать ошибок
+    raise ValueError("Не установлены обязательные переменные среды.")
 
-# Инициализация объекта бота
+
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode='html')
-# Уникальный секретный путь, по которому Telegram будет отправлять сообщения
 SECRET_ROUTE = '/' + TELEGRAM_TOKEN 
 
 # --- 3. Функции обработки сообщений ---
@@ -35,23 +33,43 @@ def send_welcome(message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
-    """Обрабатывает все входящие текстовые сообщения."""
+    """Обрабатывает все входящие текстовые сообщения и отправляет их в OpenRouter."""
     
-    # 🚨 ВНИМАНИЕ: ЗДЕСЬ ДОЛЖЕН БЫТЬ ТВОЙ КОД ДЛЯ OPENROUTER
-    
-    # Пока ты не вставил свой код для OpenRouter, мы будем просто отвечать эхом
     try:
-        # Ваш код для запроса к OpenRouter будет здесь
-        # response = api_call_to_openrouter(message.text) 
+        # API endpoint OpenRouter
+        url = "https://openrouter.ai/api/v1/chat/completions"
         
-        # Заглушка:
-        response_text = f"🤖 Ваш запрос: {message.text}. (Нужен код интеграции с OpenRouter)"
+        # Заголовки для авторизации
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        }
         
+        # Данные для отправки в OpenRouter
+        data = {
+            "model": "mistralai/mistral-7b-instruct", # Можешь изменить модель
+            "messages": [
+                {"role": "user", "content": message.text}
+            ]
+        }
+        
+        # Отправка запроса
+        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response.raise_for_status() # Вызывает ошибку, если запрос провален
+        
+        # Извлечение текста ответа
+        response_data = response.json()
+        response_text = response_data['choices'][0]['message']['content']
+        
+        # Отправка ответа пользователю
         bot.reply_to(message, response_text)
         
+    except requests.exceptions.RequestException as req_err:
+        logging.error(f"Ошибка запроса к OpenRouter: {req_err}")
+        bot.reply_to(message, "Ошибка связи с моделью OpenRouter. Попробуйте позже.")
     except Exception as e:
-        logging.error(f"Ошибка при обработке сообщения: {e}")
-        bot.reply_to(message, "Произошла ошибка при обработке запроса.")
+        logging.error(f"Критическая ошибка: {e}")
+        bot.reply_to(message, "Произошла внутренняя ошибка при обработке запроса.")
 
 # --- 4. Маршруты Flask для Webhook ---
 
@@ -91,6 +109,5 @@ def webhook():
 
 # --- 5. Запуск (Gunicorn будет использовать 'app') ---
 if __name__ == "__main__":
-    # Локальный запуск (не используется Gunicorn на Render, но полезно для тестирования)
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
