@@ -2,3 +2,4 @@ flask
 pytelegrambotapi
 requests
 gunicorn
+tinkoff-invest-api  # <-- НОВАЯ ЗАВИСИМОСТЬ
