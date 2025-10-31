@@ -8,9 +8,9 @@ from flask import Flask, request
 from telebot import types
 import telebot
 
-# Импорты для СИНХРОННОГО Tinkoff Invest API
-from tinkoff.invest import Client, MoneyValue, PortfolioResponse
-from tinkoff.invest.exceptions import RequestError # Для обработки ошибок API
+# --- ИСПРАВЛЕННЫЕ ИМПОРТЫ для установленного пакета tinkoff-investments ---
+from tinkoff.investments import Client, MoneyValue, PortfolioResponse
+from tinkoff.investments.exceptions import RequestError 
 
 # --- 1. Настройка логирования и переменных ---
 logging.basicConfig(level=logging.INFO)
@@ -41,7 +41,7 @@ def get_tinkoff_portfolio() -> str:
     try:
         # Используем синхронный Client
         with Client(TINKOFF_API_TOKEN) as client: 
-            # 1. Получаем счета
+            # 1. Получаем счета (берем первый попавшийся)
             accounts = client.users.get_accounts().accounts
             if not accounts:
                 return "❌ Не удалось найти активных счетов в Тинькофф."
@@ -55,13 +55,21 @@ def get_tinkoff_portfolio() -> str:
             total_value = to_rubles(portfolio.total_amount_portfolio)
             
             for p in portfolio.positions:
+                # ВНИМАНИЕ: Для пакета tinkoff-investments мы не можем использовать p.name, 
+                # поэтому используем p.ticker. Поле 'Название' временно удалено.
+                
                 expected_yield_value = to_rubles(p.expected_yield) if p.expected_yield else 0
                 current_price = to_rubles(p.current_price)
+                
+                # Некоторые поля могут быть None, если нет активных позиций.
+                if p.quantity is None or p.quantity.units == 0:
+                    continue 
+
                 total_position_value = current_price * p.quantity.units
                 
                 data.append({
-                    'Название': p.name,
                     'Тикер': p.ticker,
+                    'Тип': p.instrument_type,
                     'Кол-во': p.quantity.units,
                     'Цена (RUB)': f"{current_price:.2f}",
                     'Доходность (%)': f"{expected_yield_value / total_position_value * 100:.2f}" if total_position_value else "0.00"
@@ -84,7 +92,7 @@ def get_tinkoff_portfolio() -> str:
         logger.exception("Критическая ошибка при получении портфеля")
         return f"⚠️ Неизвестная ошибка при получении портфеля: {e}"
 
-# --- 4. ФУНКЦИЯ OPENROUTER ---
+# --- 4. ФУНКЦИЯ OPENROUTER (без изменений) ---
 
 def get_openrouter_response(prompt: str) -> str:
     """Отправляет запрос к OpenRouter."""
@@ -113,7 +121,7 @@ def get_openrouter_response(prompt: str) -> str:
         logger.exception("Критическая ошибка при запросе к OpenRouter")
         return f"⚠️ Ошибка при обращении к OpenRouter: {e}"
 
-# --- 5. ОБРАБОТЧИКИ СООБЩЕНИЙ ---
+# --- 5. ОБРАБОТЧИКИ СООБЩЕНИЙ (без изменений) ---
 
 @bot.message_handler(commands=['start', 'help'])
 def cmd_start(message: types.Message):
@@ -142,7 +150,7 @@ def handle_message(message: types.Message):
     bot.reply_to(message, reply)
 
 
-# --- 6. МАРШРУТЫ WEBHook (Многопоточность для стабильности) ---
+# --- 6. МАРШРУТЫ WEBHook (без изменений) ---
 
 @app.route("/")
 def index():
