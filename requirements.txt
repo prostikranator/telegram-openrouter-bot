@@ -1,6 +1,8 @@
-flask
+Flask
+gunicorn
 pytelegrambotapi
 requests
-gunicorn
-tinkoff-invest-api-sdk  # <-- ИСПРАВЛЕННОЕ ИМЯ
-pandas                 # <-- Добавлено для работы с функцией get_tinkoff_portfolio
+pandas
+tinkoff-invest-api
+protobuf
+grpcio
