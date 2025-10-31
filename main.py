@@ -14,12 +14,15 @@ app = Flask(__name__)
 # --- 2. Конфигурация Бота и Ключей ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
+# Ключ OpenRouter (должен быть секретный ключ sk-...)
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") 
+# Модель OpenRouter (должно быть название модели, с запасным вариантом)
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct") 
 
-# Проверка наличия ключей при старте
+# Проверка наличия КРИТИЧЕСКИХ ключей при старте
 if not TELEGRAM_TOKEN or not RENDER_EXTERNAL_URL or not OPENROUTER_API_KEY:
-    logging.error("Не хватает переменных среды! Проверьте TELEGRAM_TOKEN, RENDER_EXTERNAL_URL, OPENROUTER_API_KEY.")
-    # Принудительная остановка, если ключи не заданы (не должно произойти, если ты их задал)
+    logging.error("Не хватает КРИТИЧЕСКИХ переменных среды! Проверьте TELEGRAM_TOKEN, RENDER_EXTERNAL_URL, OPENROUTER_API_KEY.")
+    # Используйте raise только если уверены, что хотите остановить деплой
     # raise ValueError("Не установлены обязательные переменные среды.")
 
 # Инициализация объекта бота
@@ -36,14 +39,19 @@ def send_welcome(message):
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     """
-    Обрабатывает все входящие текстовые сообщения,
-    отправляет их в OpenRouter и обрабатывает ошибки.
+    Обрабатывает входящие сообщения, используя ключ и модель из переменных среды.
     """
     
     # Визуальный ответ в Telegram, пока модель думает
     bot.send_chat_action(message.chat.id, 'typing') 
 
     try:
+        if not OPENROUTER_API_KEY:
+            # Лог, который мы добавили для дебага, если ключа нет
+            logging.error("Невозможно выполнить запрос: API-ключ OpenRouter отсутствует.")
+            bot.reply_to(message, "Ошибка: Ключ OpenRouter API не установлен на сервере.")
+            return
+
         # API endpoint OpenRouter
         url = "https://openrouter.ai/api/v1/chat/completions"
         
@@ -55,7 +63,8 @@ def handle_message(message):
         
         # Данные для отправки в OpenRouter
         data = {
-            "model": "mistralai/mistral-7b-instruct", # Можешь изменить модель
+            # Используем переменную, которую мы настроили
+            "model": OPENROUTER_MODEL, 
             "messages": [
                 {"role": "user", "content": message.text}
             ]
@@ -75,9 +84,15 @@ def handle_message(message):
         bot.reply_to(message, response_text)
         
     except requests.exceptions.HTTPError as http_err:
-        # Ошибка, связанная с API (например, 401, 404, 500)
-        logging.error(f"Ошибка HTTP запроса к OpenRouter (статус {http_err.response.status_code}): {http_err.response.text}")
-        bot.reply_to(message, "Ошибка API. Проверьте ключ OpenRouter или лимиты.")
+        # Ошибка 401 Unauthorized — самая частая, если ключ неверный
+        if http_err.response.status_code == 401:
+            error_message = "Ошибка 401: API-ключ недействителен или отсутствует. Пожалуйста, проверьте OPENROUTER_API_KEY."
+        else:
+            error_message = f"Ошибка HTTP запроса к OpenRouter (статус {http_err.response.status_code})."
+        
+        logging.error(error_message)
+        bot.reply_to(message, error_message)
+        
     except requests.exceptions.RequestException as req_err:
         # Ошибка сети/таймаута
         logging.error(f"Ошибка запроса к OpenRouter: {req_err}")
@@ -118,9 +133,8 @@ def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
-        # Асинхронная обработка сообщений
         bot.process_new_updates([update])
-        return '', 200 # Сразу возвращаем 200, чтобы Telegram не переотправлял запрос
+        return '', 200
     else:
         return 'Bad Request', 403
 
