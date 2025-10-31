@@ -172,4 +172,5 @@ def set_webhook():
 
 @app.route(SECRET_ROUTE, methods=["POST"])
 def telegram_webhook():
-    """Главный маршрут: запускает всю обрабо
+    """Главный маршрут: запускает всю обрабо"""
+
