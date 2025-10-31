@@ -4,3 +4,4 @@ pytelegrambotapi
 requests
 pandas
 tinkoff-invest
+tabulate
