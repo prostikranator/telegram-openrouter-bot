@@ -8,9 +8,10 @@ from flask import Flask, request
 from telebot import types
 import telebot
 
-# --- ИСПРАВЛЕННЫЕ ИМПОРТЫ для установленного пакета tinkoff-investments ---
-from tinkoff.investments import Client, MoneyValue, PortfolioResponse
-from tinkoff.investments.exceptions import RequestError 
+# --- ФИНАЛЬНЫЙ ИСПРАВЛЕННЫЙ ИМПОРТ: Используем официальное пространство имен tinkoff.invest ---
+# Этот путь импорта соответствует пакету, установленному через ссылку на GitHub.
+from tinkoff.invest import Client, MoneyValue, PortfolioResponse
+from tinkoff.invest.exceptions import RequestError 
 
 # --- 1. Настройка логирования и переменных ---
 logging.basicConfig(level=logging.INFO)
@@ -55,8 +56,7 @@ def get_tinkoff_portfolio() -> str:
             total_value = to_rubles(portfolio.total_amount_portfolio)
             
             for p in portfolio.positions:
-                # ВНИМАНИЕ: Для пакета tinkoff-investments мы не можем использовать p.name, 
-                # поэтому используем p.ticker. Поле 'Название' временно удалено.
+                # ИСКОМЫЕ ПОЛЯ: Используем p.ticker и p.instrument_type вместо p.name
                 
                 expected_yield_value = to_rubles(p.expected_yield) if p.expected_yield else 0
                 current_price = to_rubles(p.current_price)
@@ -92,7 +92,7 @@ def get_tinkoff_portfolio() -> str:
         logger.exception("Критическая ошибка при получении портфеля")
         return f"⚠️ Неизвестная ошибка при получении портфеля: {e}"
 
-# --- 4. ФУНКЦИЯ OPENROUTER (без изменений) ---
+# --- 4. ФУНКЦИЯ OPENROUTER ---
 
 def get_openrouter_response(prompt: str) -> str:
     """Отправляет запрос к OpenRouter."""
@@ -121,7 +121,7 @@ def get_openrouter_response(prompt: str) -> str:
         logger.exception("Критическая ошибка при запросе к OpenRouter")
         return f"⚠️ Ошибка при обращении к OpenRouter: {e}"
 
-# --- 5. ОБРАБОТЧИКИ СООБЩЕНИЙ (без изменений) ---
+# --- 5. ОБРАБОТЧИКИ СООБЩЕНИЙ ---
 
 @bot.message_handler(commands=['start', 'help'])
 def cmd_start(message: types.Message):
@@ -150,7 +150,7 @@ def handle_message(message: types.Message):
     bot.reply_to(message, reply)
 
 
-# --- 6. МАРШРУТЫ WEBHook (без изменений) ---
+# --- 6. МАРШРУТЫ WEBHook ---
 
 @app.route("/")
 def index():
