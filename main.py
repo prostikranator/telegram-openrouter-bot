@@ -8,22 +8,23 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 # --- 1. Инициализация Flask (ОБЯЗАТЕЛЬНО 'app') ---
-# Gunicorn ищет эту переменную!
 app = Flask(__name__)
 
 # --- 2. Конфигурация Бота и Ключей ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
-# Ключ OpenRouter (должен быть секретный ключ sk-...)
+# Используем запасной вариант для RENDER_EXTERNAL_URL на случай, если он не установлен сразу
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost") 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") 
-# Модель OpenRouter (должно быть название модели, с запасным вариантом)
+# Используем запасной вариант для модели
 OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct") 
 
-# Проверка наличия КРИТИЧЕСКИХ ключей при старте
-if not TELEGRAM_TOKEN or not RENDER_EXTERNAL_URL or not OPENROUTER_API_KEY:
-    logging.error("Не хватает КРИТИЧЕСКИХ переменных среды! Проверьте TELEGRAM_TOKEN, RENDER_EXTERNAL_URL, OPENROUTER_API_KEY.")
-    # Используйте raise только если уверены, что хотите остановить деплой
-    # raise ValueError("Не установлены обязательные переменные среды.")
+# ВАЖНОЕ ЛОГИРОВАНИЕ ДЛЯ ПРОВЕРКИ КЛЮЧЕЙ ПРИ СТАРТЕ
+if OPENROUTER_API_KEY and TELEGRAM_TOKEN:
+    logging.info(f"KEYS LOADED. Model: {OPENROUTER_MODEL}")
+    logging.info(f"API Key Status: SUCCESS. Starts with: {OPENROUTER_API_KEY[:4]}...") 
+else:
+    logging.critical("CRITICAL: One or more required keys (TELEGRAM_TOKEN or OPENROUTER_API_KEY) are MISSING.")
+
 
 # Инициализация объекта бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode='html')
@@ -42,12 +43,10 @@ def handle_message(message):
     Обрабатывает входящие сообщения, используя ключ и модель из переменных среды.
     """
     
-    # Визуальный ответ в Telegram, пока модель думает
     bot.send_chat_action(message.chat.id, 'typing') 
 
     try:
         if not OPENROUTER_API_KEY:
-            # Лог, который мы добавили для дебага, если ключа нет
             logging.error("Невозможно выполнить запрос: API-ключ OpenRouter отсутствует.")
             bot.reply_to(message, "Ошибка: Ключ OpenRouter API не установлен на сервере.")
             return
@@ -63,8 +62,7 @@ def handle_message(message):
         
         # Данные для отправки в OpenRouter
         data = {
-            # Используем переменную, которую мы настроили
-            "model": OPENROUTER_MODEL, 
+            "model": OPENROUTER_MODEL, # Используем переменную OPENROUTER_MODEL
             "messages": [
                 {"role": "user", "content": message.text}
             ]
@@ -84,11 +82,11 @@ def handle_message(message):
         bot.reply_to(message, response_text)
         
     except requests.exceptions.HTTPError as http_err:
-        # Ошибка 401 Unauthorized — самая частая, если ключ неверный
+        # Логика обработки ошибок API (особенно 401)
         if http_err.response.status_code == 401:
-            error_message = "Ошибка 401: API-ключ недействителен или отсутствует. Пожалуйста, проверьте OPENROUTER_API_KEY."
+            error_message = "Ошибка 401: API-ключ недействителен. Пожалуйста, проверьте OPENROUTER_API_KEY."
         else:
-            error_message = f"Ошибка HTTP запроса к OpenRouter (статус {http_err.response.status_code})."
+            error_message = f"Ошибка HTTP запроса к OpenRouter (статус {http_err.response.status_code}): {http_err.response.text}"
         
         logging.error(error_message)
         bot.reply_to(message, error_message)
@@ -98,7 +96,7 @@ def handle_message(message):
         logging.error(f"Ошибка запроса к OpenRouter: {req_err}")
         bot.reply_to(message, "Ошибка связи с моделью OpenRouter. Попробуйте позже.")
     except Exception as e:
-        # Критическая ошибка (например, ошибка JSON)
+        # Критическая ошибка
         logging.error(f"Критическая ошибка: {e}")
         bot.reply_to(message, f"Произошла внутренняя ошибка: {e}")
 
