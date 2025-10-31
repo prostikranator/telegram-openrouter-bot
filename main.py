@@ -3,14 +3,16 @@ import requests
 import json
 import threading
 import logging
-import pandas as pd # <-- НОВЫЙ ИМПОРТ ДЛЯ ФОРМАТИРОВАНИЯ
+import pandas as pd 
+import asyncio # <-- НУЖНО ДЛЯ АСИНХРОННОСТИ TINKOFF AIO
 from flask import Flask, request
 from telebot import types
 import telebot
 
-# Импорт Tinkoff Invest API
-from tinkoff.invest import Client, MoneyValue, PortfolioPosition, PortfolioResponse
-from tinkoff.invest.exceptions import AioRequestError # Для обработки ошибок API
+# Импорты для АСИНХРОННОГО Tinkoff Invest API
+from tinkoff.invest.aio import Client # <-- АСИНХРОННЫЙ КЛИЕНТ
+from tinkoff.invest import MoneyValue, PortfolioResponse
+from tinkoff.invest.exceptions import AioRequestError 
 
 # --- 1. Настройка логирования и переменных ---
 logging.basicConfig(level=logging.INFO)
@@ -18,11 +20,11 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-TINKOFF_API_TOKEN = os.getenv("TINKOFF_API_TOKEN") # <-- НОВЫЙ ТОКЕН ТИНЬКОФФ
+TINKOFF_API_TOKEN = os.getenv("TINKOFF_API_TOKEN") 
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "gpt-3.5-turbo")
 
 if not TELEGRAM_TOKEN or not OPENROUTER_API_KEY or not TINKOFF_API_TOKEN:
-    logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Не найдены TELEGRAM_TOKEN, OPENROUTER_API_KEY или TINKOFF_API_TOKEN.")
+    logger.critical("❌ КРИТИЧЕСКАЯ ОШИБКА: Не найдены все обязательные токены.")
     raise ValueError("Не найдены обязательные переменные среды.")
 
 # --- 2. Инициализация ---
@@ -30,74 +32,70 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode='HTML')
 app = Flask(__name__)
 SECRET_ROUTE = f"/{TELEGRAM_TOKEN}"
 
-# --- 3. ФУНКЦИЯ: Запрос данных портфеля Тинькофф ---
+# --- 3. ФУНКЦИЯ: Запрос данных портфеля Тинькофф (АСИНХРОННАЯ) ---
 
 def to_rubles(money: MoneyValue) -> float:
     """Конвертирует MoneyValue в float рублей."""
     return money.units + money.nano / 1_000_000_000
 
-def get_tinkoff_portfolio() -> str:
-    """Получает данные портфеля и форматирует их в таблицу."""
+async def _get_tinkoff_portfolio_async() -> str:
+    """АСИНХРОННЫЙ запрос данных портфеля и форматирование."""
     try:
-        with Client(TINKOFF_API_TOKEN) as client:
-            # 1. Получаем счета (берем первый попавшийся)
-            accounts = client.users.get_accounts().accounts
+        # Используем async with для асинхронного клиента
+        async with Client(TINKOFF_API_TOKEN) as client: 
+            # 1. Получаем счета (await обязателен)
+            accounts = (await client.users.get_accounts()).accounts
             if not accounts:
                 return "❌ Не удалось найти активных счетов в Тинькофф."
             account_id = accounts[0].id
             
-            # 2. Получаем портфель по этому счету
-            portfolio: PortfolioResponse = client.operations.get_portfolio(account_id=account_id)
+            # 2. Получаем портфель
+            portfolio: PortfolioResponse = await client.operations.get_portfolio(account_id=account_id)
             
             # 3. Форматируем данные
             data = []
-            
-            # Добавляем общую стоимость активов
             total_value = to_rubles(portfolio.total_amount_portfolio)
             
-            # Собираем данные по позициям
             for p in portfolio.positions:
+                # Избегаем обращения к ожидаемому доходу, если его нет
+                expected_yield_value = to_rubles(p.expected_yield) if p.expected_yield else 0
                 current_price = to_rubles(p.current_price)
-                expected_yield = to_rubles(p.expected_yield)
+                total_position_value = current_price * p.quantity.units
                 
                 data.append({
                     'Название': p.name,
                     'Тикер': p.ticker,
                     'Кол-во': p.quantity.units,
                     'Цена (RUB)': f"{current_price:.2f}",
-                    'Доходность (%)': f"{expected_yield / (current_price * p.quantity.units) * 100:.2f}" if (current_price * p.quantity.units) else "0.00"
+                    'Доходность (%)': f"{expected_yield_value / total_position_value * 100:.2f}" if total_position_value else "0.00"
                 })
 
             df = pd.DataFrame(data)
-            
-            # Форматирование для Telegram (Markdown/HTML)
             header = f"<b>💰 Портфель. Общая стоимость: {total_value:.2f} RUB</b>\n\n"
             
-            # Простая таблица в HTML для Telegram
             if not df.empty:
-                 table_html = df.to_html(index=False, float_format='%.2f', classes='table table-striped', escape=False)
-                 # Преобразуем HTML-таблицу в более читаемый Markdown (или используем Pandas to_markdown, если установлена)
-                 # Здесь для простоты вернем текст, используя Pandas to_markdown, если он доступен
-                 try:
-                     table_text = df.to_markdown(index=False, numalign="left", stralign="left")
-                 except ImportError:
-                     table_text = df.to_string(index=False)
-                 
+                 # Используем to_markdown для форматирования таблицы в Telegram
+                 table_text = df.to_markdown(index=False, numalign="left", stralign="left")
                  return header + f"<pre>{table_text}</pre>"
             else:
                  return header + "Портфель пуст."
 
     except AioRequestError as e:
-        logger.error(f"Ошибка API Тинькофф: {e}")
+        logger.error(f"Ошибка API Тинькофф (AioRequestError): {e}")
         return "⚠️ Ошибка связи с API Тинькофф. Проверьте токен или статус счетов."
     except Exception as e:
         logger.exception("Критическая ошибка при получении портфеля")
-        return f"⚠️ Неизвестная ошибка: {e}"
+        return f"⚠️ Неизвестная ошибка при получении портфеля: {e}"
+
+def get_tinkoff_portfolio() -> str:
+    """Синхронная обертка: вызывает асинхронную функцию и ждет результат."""
+    # Запускаем асинхронную функцию из синхронного потока
+    return asyncio.run(_get_tinkoff_portfolio_async())
 
 # --- 4. ФУНКЦИЯ OPENROUTER ---
 
 def get_openrouter_response(prompt: str) -> str:
-    # ... (Оставляем как было, чтобы не менять рабочую часть) ...
+    """Отправляет запрос к OpenRouter."""
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -131,11 +129,11 @@ def cmd_start(message: types.Message):
 
 @bot.message_handler(commands=['portfolio'])
 def cmd_portfolio(message: types.Message):
-    """Новая команда: Запрос портфеля Тинькофф."""
+    """Команда: Запрос портфеля Тинькофф."""
     logger.info(f"Получена команда /portfolio от {message.chat.id}")
     bot.send_chat_action(message.chat.id, 'typing')
     
-    # Вызываем функцию получения данных
+    # Вызываем СИНХРОННУЮ ОБЕРТКУ
     report = get_tinkoff_portfolio()
     
     bot.reply_to(message, report)
@@ -152,9 +150,8 @@ def handle_message(message: types.Message):
     bot.reply_to(message, reply)
 
 
-# --- 6. МАРШРУТЫ WEBHook (Остались без изменений, т.к. они уже рабочие) ---
+# --- 6. МАРШРУТЫ WEBHook ---
 
-# ... (Оставляем рабочие маршруты Webhook и Flask без изменений) ...
 @app.route("/")
 def index():
     return "✅ Бот запущен и работает.", 200
@@ -180,7 +177,7 @@ def telegram_webhook():
     try:
         json_string = request.get_data().decode("utf-8")
         update = telebot.types.Update.de_json(json_string)
-        # Запуск обработки в отдельном потоке
+        # Запуск обработки в отдельном потоке (для предотвращения таймаута)
         threading.Thread(target=bot.process_new_updates, args=([update],), daemon=True).start()
         return "OK", 200
     except Exception as e:
