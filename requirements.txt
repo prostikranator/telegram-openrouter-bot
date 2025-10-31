@@ -3,4 +3,3 @@ gunicorn
 pytelegrambotapi
 requests
 pandas
-git+https://github.com/Tinkoff/invest-openapi-python-aio.git@main#egg=tinkoff-invest-api-sdk-aio
